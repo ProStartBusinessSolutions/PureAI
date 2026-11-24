@@ -65,7 +65,7 @@ The web control panel is for administrators: models, settings and accounts.
 
 ## For developers
 
-{Where it runs, how it is built and deployed, and how A·R·I updates are brought in.}
+How PureAI is built, deployed to the DGX Spark, and kept up to date with A·R·I: see [DEPLOYMENT.md](DEPLOYMENT.md).
 
 ---
 

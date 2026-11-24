@@ -6,6 +6,7 @@ External/*/.git
 !README.md
 !THIRD_PARTY.md
 !ADDITIONAL-TERMS.md
+!DEPLOYMENT.md
 !.github/release-notes/*.md
 *.log
 
