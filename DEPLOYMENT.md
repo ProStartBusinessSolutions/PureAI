@@ -2,12 +2,12 @@
 
 How PureAI gets from this repository to the DGX Spark.
 
-**Status: plan.** The repository changes in step 1 are still to do.
+**Status:** in use from v1.0.0. Some of the repository changes in step 1 are still to do.
 
 ## How it fits together
 
 ```
-commit + tag vX.Y.Z.B ──► build ARM64 image ──► ghcr.io/prostartbusinesssolutions/pureai ──► Portainer on the Spark
+commit + tag vX.Y.Z   ──► build ARM64 image ──► ghcr.io/prostartbusinesssolutions/pureai ──► Portainer on the Spark
                           (GitHub Actions,         (private package)                        "Pull and redeploy"
                            or a developer laptop)
 ```
@@ -20,26 +20,26 @@ commit + tag vX.Y.Z.B ──► build ARM64 image ──► ghcr.io/prostartbusi
 
 ## Rules
 
-- **Only deploy what's pushed and tagged.** Every build comes from a commit that's pushed to this repository and tagged `vX.Y.Z.B`, for example `v0.11.0.1`, and the image carries the same version. The source of whatever is running is then always public, which is what the AGPL asks of a hosted, modified version.
-- **Four-part tags are ours.** A·R·I tags its releases with three parts (`v0.11.0`), so the two never clash.
+- **Only deploy what's pushed and tagged.** Every build comes from a commit that's pushed to this repository and tagged `vX.Y.Z`, for example `v1.0.0`, and the image carries the same version. The source of whatever is running is then always public, which is what the AGPL asks of a hosted, modified version.
+- **PureAI has its own version numbers.** They started at `v1.0.0` (built from A·R·I 0.11.0) and don't follow A·R·I's. A·R·I's tags look the same, so they're never fetched into this repository (see Bringing in A·R·I updates).
 - **Nothing ProStart-specific goes in the repository or the image.** This repository is public. Accounts, tokens, API keys and the PureBill connection are set up in the control panel, and they live in `/PureAI/Data`.
 - **Keep the credit.** The About screen and the startup log keep the A·R·I credit. See [NOTICE](NOTICE).
 
-## 1. Repository changes (one-time, to do)
+## 1. Repository changes (one-time)
 
-| File | Change | Why |
-|---|---|---|
-| `.github/workflows/docker.yml` | Set `IMAGE` to `ghcr.io/prostartbusinesssolutions/pureai`. Run on `v*.*.*.*` tags and by hand only, not on every push to `main`. | Publishes our image, and only for tagged builds. |
-| `Dockerfile` | Point the `org.opencontainers.image.source` label at this repository. | Links the package to PureAI rather than A·R·I. |
-| `Dockerfile` | Run the .NET and web UI build stage on the build machine's own platform (`FROM --platform=$BUILDPLATFORM`), cross-compiling for `linux-arm64`. | Lets an x64 laptop build the ARM64 image quickly. .NET under emulation is slow and unreliable. GitHub Actions builds on a native ARM64 runner, so it doesn't need this. |
-| `docker/compose.pureai.yml` | New file: the Portainer stack (below). | |
-| `ARI.UI/public/controlpanel.html` | About screen: add PureAI as entry 2 of the credit chain, with a link to this repository. | The credit chain, and the AGPL's source offer to people using PureAI over the network. |
+| File | Change | Why | Status |
+|---|---|---|---|
+| `.github/workflows/docker.yml` | `IMAGE` is `ghcr.io/prostartbusinesssolutions/pureai`. Runs on `v*.*.*` tags and by hand only, not on pushes to `main`. A hand-run on a branch publishes `main`, never `latest`. | Publishes our image, and only for tagged builds. | Done (v1.0.0) |
+| `Dockerfile` | The `org.opencontainers.image.source` label points at this repository; title and description name PureAI and credit A·R·I. | Links the package to PureAI rather than A·R·I. | Done (v1.0.0) |
+| `Dockerfile` | Run the .NET and web UI build stage on the build machine's own platform (`FROM --platform=$BUILDPLATFORM`), cross-compiling for `linux-arm64`. | Lets an x64 laptop build the ARM64 image quickly. .NET under emulation is slow and unreliable. GitHub Actions builds on a native ARM64 runner, so it doesn't need this. | To do |
+| `docker/compose.pureai.yml` | New file: the Portainer stack (below). | | To do |
+| `ARI.UI/public/controlpanel.html` | About screen: add PureAI as entry 2 of the credit chain, with a link to this repository. | The credit chain, and the AGPL's source offer to people using PureAI over the network. | To do |
 
 ## 2. One-time setup
 
 ### GitHub
 
-1. Turn on Actions for this repository, then turn off `release.yml` and `llama-cuda.yml`:
+1. Turn on Actions for this repository, then turn off `release.yml` and `llama-cuda.yml` (done):
 
        gh workflow disable release.yml
        gh workflow disable llama-cuda.yml
@@ -122,20 +122,20 @@ services:
 ## 3. Releasing a version
 
 1. Get `main` to the state you want to release, and push it.
-2. Set `version` in `manifest.json` to the new version (for example `0.11.0.1`). Commit and push it.
+2. Set `version` in `manifest.json` to the new version (for example `1.0.1`). Commit and push it.
 3. Tag the commit and push the tag:
 
-       git tag v0.11.0.1
-       git push origin v0.11.0.1
+       git tag v1.0.1
+       git push origin v1.0.1
 
 4. Back up `/PureAI/Data` on the Spark (see Backups).
 5. Build and push the image:
-   - **GitHub Actions (the normal route).** The tag starts `docker.yml`. It builds on a native ARM64 runner and pushes `pureai:0.11.0.1` and `pureai:latest`.
+   - **GitHub Actions (the normal route).** The tag starts `docker.yml`. It builds on a native ARM64 runner and pushes `pureai:1.0.1` and `pureai:latest`.
    - **A developer laptop (the fallback).** Start Docker Desktop, then run these from the tagged checkout:
 
          git submodule update --init --depth 1 Submodules/SmartReader
          docker login ghcr.io -u <github-user>
-         docker buildx build --platform linux/arm64 -t ghcr.io/prostartbusinesssolutions/pureai:0.11.0.1 -t ghcr.io/prostartbusinesssolutions/pureai:latest --push .
+         docker buildx build --platform linux/arm64 -t ghcr.io/prostartbusinesssolutions/pureai:1.0.1 -t ghcr.io/prostartbusinesssolutions/pureai:latest --push .
 
 6. On the Spark, go to **Portainer → Stacks → pureai** and choose **Pull and redeploy**.
 7. Check that:
@@ -145,7 +145,7 @@ services:
 
 ## Rolling back
 
-1. In the stack's environment variables, set `PUREAI_TAG` to the previous version, for example `0.11.0.1`.
+1. In the stack's environment variables, set `PUREAI_TAG` to the previous version, for example `1.0.0`.
 2. Update the stack.
 3. If the newer version changed anything in `/PureAI/Data`, restore the backup taken before the release.
 4. Once a fixed release is out, set `PUREAI_TAG` back to `latest`.
@@ -154,13 +154,14 @@ services:
 
 ```
 git remote add upstream https://github.com/ari-labz/A.R.I.git    # once
+git config remote.upstream.tagOpt --no-tags                       # once: A·R·I's tags would clash with ours
 git fetch upstream
 git merge upstream/main          # or a specific A·R·I release commit
 ```
 
 - **Merge, never rebase.** A normal merge keeps every upstream commit and its author. Never rebase, squash or re-author upstream commits (ADDITIONAL-TERMS.md, section 4).
 - **Keep our entries.** If `README.md`, `NOTICE` or the About screen conflict, keep both credit entries: A·R·I's first, then PureAI's.
-- **Then release as usual.** Build, test, and release as in step 3, for example as `v0.12.0.1`.
+- **Then release as usual.** Build, test, and release as in step 3, with the next PureAI version.
 
 ## Backups
 

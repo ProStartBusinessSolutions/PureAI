@@ -104,9 +104,9 @@ RUN set -eux; \
 FROM nvidia/cuda:${CUDA_VERSION}-runtime-ubuntu24.04 AS runtime
 
 ARG ARI_VERSION=dev
-LABEL org.opencontainers.image.title="A·R·I" \
-      org.opencontainers.image.description="A·R·I server with llama.cpp (CUDA) and the web UI" \
-      org.opencontainers.image.source="https://github.com/ari-labz/A.R.I" \
+LABEL org.opencontainers.image.title="PureAI" \
+      org.opencontainers.image.description="PureAI server with llama.cpp (CUDA) and the web UI. Based on A·R·I by Xywren — https://github.com/ari-labz/A.R.I" \
+      org.opencontainers.image.source="https://github.com/ProStartBusinessSolutions/PureAI" \
       org.opencontainers.image.version="${ARI_VERSION}"
 
 # ca-certificates/curl: model downloads and the health check. git: ARI's git tools. espeak-ng + python:

@@ -1,20 +1,17 @@
 name: Docker image
 
-# Builds the A·R·I server image for ARM64 (DGX Spark and other ARM NVIDIA machines) and publishes it to
-# ghcr.io/ari-labz/ari. Runs on every push to main (tagged "latest"), on every release tag (tagged with the version and
-# "latest"), or by hand from the Actions tab.
+# Builds the PureAI server image for ARM64 (the DGX Spark) and publishes it to the private package
+# ghcr.io/prostartbusinesssolutions/pureai. Runs when a version tag is pushed (e.g. v1.0.0), which publishes the
+# version and "latest", or by hand from the Actions tab. A hand-run on a branch publishes "main", never "latest", so
+# "latest" only ever moves to a tagged release. See DEPLOYMENT.md.
 #
 # Each platform builds on a native runner (no emulation — compiling llama.cpp for CUDA under QEMU would take hours),
-# pushes by digest, and a final job stitches the two into one multi-arch tag.
+# pushes by digest, and a final job stitches them into one tag.
 
 on:
   push:
-    branches: [main]
     tags:
       - "v[0-9]*.[0-9]*.[0-9]*"
-    # Docs-only changes don't need an image build.
-    paths-ignore:
-      - "**.md"
   workflow_dispatch:
 
 # A newer push to the same branch replaces a build that is still running.
@@ -27,7 +24,7 @@ permissions:
   packages: write
 
 env:
-  IMAGE: ghcr.io/ari-labz/ari
+  IMAGE: ghcr.io/prostartbusinesssolutions/pureai
 
 jobs:
   build:
@@ -104,11 +101,12 @@ jobs:
         run: |
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then V="${GITHUB_REF_NAME#v}"
           else V="$(python3 -c "import json;print(json.load(open('${GITHUB_WORKSPACE}/manifest.json'))['version'])")"; fi
-          # "latest" is the newest build of main; a release tag also publishes its version number so it can be pinned.
+          # A release tag publishes its version number (so it can be pinned) and "latest" (what the Spark runs).
+          # A hand-run on a branch publishes "main" only, so "latest" never points at an untagged build.
           if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
-            TAGS="-t ${IMAGE}:${V} -t ${IMAGE}:latest"
+            TAGS="-t ${IMAGE}:${V} -t ${IMAGE}:latest"; SHOW="${IMAGE}:${V}"
           else
-            TAGS="-t ${IMAGE}:latest"
+            TAGS="-t ${IMAGE}:main"; SHOW="${IMAGE}:main"
           fi
           docker buildx imagetools create ${TAGS} $(printf "${IMAGE}@sha256:%s " *)
-          docker buildx imagetools inspect "${IMAGE}:latest"
+          docker buildx imagetools inspect "${SHOW}"
