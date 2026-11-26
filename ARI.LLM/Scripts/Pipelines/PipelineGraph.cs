@@ -12,10 +12,14 @@ internal sealed class PipelineGraph
     /// <param name="Type">start, end, agent (a named agent), pipeline (another pipeline run as a single step).</param>
     /// <param name="OnError">If set and this node fails, the pipeline carries on with this text as the node's output instead of failing.</param>
     /// <param name="ThreadCode">An agent step with a code keeps its own sub-thread under the chat, found again by that code on every message, so it remembers what it did before.</param>
-    internal sealed record Node(string Id, string Type, string? Agent, string? Pipeline = null, string? OnError = null, string? ThreadCode = null);
+    /// <param name="Server">The server this step runs on, by name, instead of its agent's own ("Runs on" in the editor). Only Dialogue and
+    /// agents made in the control panel can be moved; the step then runs a copy of the agent on that server (LLMModule.AgentOn).
+    /// Null or empty: the agent's own server.</param>
+    internal sealed record Node(string Id, string Type, string? Agent, string? Pipeline = null, string? OnError = null, string? ThreadCode = null, string? Server = null);
 
-    /// <summary>How the validator looks things up: an agent's input ports, or another pipeline.</summary>
-    internal sealed record Env(Func<string, string[]?> PortsOf, Func<string, PipelineGraph?> PipelineById);
+    /// <summary>How the validator looks things up: an agent's input ports, another pipeline, and whether a server exists
+    /// (null skips that check).</summary>
+    internal sealed record Env(Func<string, string[]?> PortsOf, Func<string, PipelineGraph?> PipelineById, Func<string, bool>? ServerExists = null);
     /// <param name="FromPort">Which output of the source the wire leaves from. Only START has more than one: "history" and "message".</param>
     /// <param name="MaxRounds">On a pathway wire (one leaving an agent's pathway tool, such as Fail): how many times it may be taken in one turn.</param>
     internal sealed record Edge(string From, string To, string Port, bool Stream, string FromPort = StartHistory, int MaxRounds = 2);
@@ -166,7 +170,8 @@ internal sealed class PipelineGraph
                     nodes.Add(new Node(Str(n, "id"), Str(n, "type"), n.TryGetProperty("agent", out JsonElement a) ? a.GetString() : null,
                         n.TryGetProperty("pipeline", out JsonElement sp) ? sp.GetString() : null,
                         n.TryGetProperty("onError", out JsonElement oe) && oe.ValueKind == JsonValueKind.String ? (oe.GetString() == "@memory-unavailable" ? MemoryUnavailableText : oe.GetString()) : null,
-                        n.TryGetProperty("thread", out JsonElement tc) && tc.ValueKind == JsonValueKind.String && tc.GetString() is { Length: > 0 } code ? code : null));
+                        n.TryGetProperty("thread", out JsonElement tc) && tc.ValueKind == JsonValueKind.String && tc.GetString() is { Length: > 0 } code ? code : null,
+                        n.TryGetProperty("server", out JsonElement sv) && sv.ValueKind == JsonValueKind.String && sv.GetString() is { Length: > 0 } server ? server : null));
             if (p.TryGetProperty("edges", out JsonElement es))
                 foreach (JsonElement e in es.EnumerateArray())
                     edges.Add(new Edge(Str(e, "from"), Str(e, "to"), Str(e, "port"), e.TryGetProperty("mode", out JsonElement m) && m.GetString() == "stream",
@@ -235,6 +240,17 @@ internal sealed class PipelineGraph
 
         foreach (Node n in Nodes.Where(n => n.Type is not ("start" or "end" or "agent" or "pipeline")))
             problems.Add($"A '{n.Type}' step isn't supported any more; remove it.");
+
+        // A step set to run on a chosen server: Dialogue and agents made in the control panel can be moved there; the other
+        // built-ins (Recall, Coder, Talking) always run on their own agent's server.
+        foreach (Node n in Nodes.Where(n => n.Type == "agent" && n.Server is { Length: > 0 }))
+        {
+            string label = n.Agent!.Equals("Memory", StringComparison.OrdinalIgnoreCase) ? "Recall" : n.Agent!;
+            if (BuiltInPorts.ContainsKey(n.Agent!) && !n.Agent!.Equals("Dialogue", StringComparison.OrdinalIgnoreCase))
+                problems.Add($"{label} always runs on its own server; only Dialogue and agents you made can run on another.");
+            else if (env.ServerExists is { } exists && !exists(n.Server!))
+                problems.Add($"{label} is set to run on '{n.Server}', which isn't a server any more.");
+        }
 
         // A sub-thread code belongs to one agent: two different agents can't share "memory".
         foreach (IGrouping<string, Node> sharing in Nodes.Where(n => n.Type == "agent" && n.ThreadCode is not null).GroupBy(n => n.ThreadCode!, StringComparer.OrdinalIgnoreCase))

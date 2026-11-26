@@ -23,6 +23,10 @@ internal sealed class GraphPipeline : Pipeline
     /// <summary>Finds a pipeline by id, so one can run inside another.</summary>
     private readonly Func<string, PipelineGraph?> pipelineById;
 
+    /// <summary>An agent as it runs on a named server (a step's "Runs on"), or null if either doesn't exist. Null for the speech
+    /// graph: a voice reply always runs where the voice agent is.</summary>
+    private readonly Func<string, string, Agent?>? agentOn;
+
     private const int MaxDepth = 8;
 
     /// <summary>The sub-thread code Recall keeps under a chat when the graph doesn't name one.</summary>
@@ -49,7 +53,8 @@ internal sealed class GraphPipeline : Pipeline
         Func<string, PipelineGraph?> pipelineById,
         ConcurrentDictionary<string, CancellationTokenSource> processingThreads,
         ConcurrentDictionary<string, LiveCallInfo>             liveCalls,
-        Action<string>                                          notifyWatchers)
+        Action<string>                                          notifyWatchers,
+        Func<string, string, Agent?>?                           agentOn = null)
         : base(processingThreads, liveCalls, notifyWatchers)
     {
         this.textingAgent = textingAgent;
@@ -59,6 +64,7 @@ internal sealed class GraphPipeline : Pipeline
         this.customAgents = customAgents;
         this.graphFor     = graphFor;
         this.pipelineById = pipelineById;
+        this.agentOn      = agentOn;
 
         textingAgent.ThreadBufferFull     += key => ThreadBufferFull?.Invoke(key);
         textingAgent.ThreadBecameInactive += key => ThreadBecameInactive?.Invoke(key);
@@ -200,17 +206,18 @@ internal sealed class GraphPipeline : Pipeline
 
                 if (agentName.Equals("Dialogue", StringComparison.OrdinalIgnoreCase))
                 {
+                    Dialogue dialogue = OnServer(node, "Dialogue", textingAgent);
                     inputs.TryGetValue("memories", out string? mem);
                     // Dialogue's prompt can place the memory itself with {memory} and take extra inputs as {tokens}; without those it works as it always has.
                     Dictionary<string, string> dialogueTokens = inputs.ToDictionary(kv => kv.Key, kv => kv.Value ?? "", StringComparer.OrdinalIgnoreCase);
                     dialogueTokens["memory"] = dialogueTokens["memories"] = mem?.Trim() ?? "";
                     foreach (string extra in PortsOf("Dialogue") ?? []) dialogueTokens.TryAdd(extra, "");   // an input left unwired reads as empty, not as the literal {token}
-                    bool placesMemory = System.Text.RegularExpressions.Regex.IsMatch(textingAgent.AgentPrompt, @"\{(memory|memories)\}");
+                    bool placesMemory = System.Text.RegularExpressions.Regex.IsMatch(dialogue.AgentPrompt, @"\{(memory|memories)\}");
                     Agent.PromptTokens.Value = dialogueTokens;
-                    if (isReply) ReviewLoop.Active.Value = LoopFor(node, textingAgent);
+                    if (isReply) ReviewLoop.Active.Value = LoopFor(node, dialogue);
                     try
                     {
-                        return await textingAgent.Prompt(thread, effectivePrompt, new PromptOptions
+                        return await dialogue.Prompt(thread, effectivePrompt, new PromptOptions
                         {
                             Username            = username,
                             RecallNotes         = mem,
@@ -226,7 +233,7 @@ internal sealed class GraphPipeline : Pipeline
                     finally { Agent.PromptTokens.Value = null; ReviewLoop.Active.Value = null; }
                 }
 
-                CustomAgent agent = customAgents[agentName];
+                CustomAgent agent = OnServer(node, agentName, customAgents[agentName]);
 
                 // Something upstream had nothing to hand over (Memory finding nothing, say): an agent behind the scenes has nothing to work on, so it doesn't run.
                 if (!isReply && inputs.Values.Any(v => v is null))
@@ -334,6 +341,16 @@ internal sealed class GraphPipeline : Pipeline
     }
 
     private static string pipLabel(PipelineGraph.Node n) => n.Agent is "Memory" ? "Recall" : n.Agent ?? n.Pipeline ?? n.Id;
+
+    /// <summary>The agent a step runs: <paramref name="own"/>, or its copy on the server the step is set to run on. A server
+    /// that has gone since the pipeline was checked (the validator flags it) falls back to the agent's own, with a warning.</summary>
+    private T OnServer<T>(PipelineGraph.Node node, string agentName, T own) where T : Agent
+    {
+        if (node.Server is not { Length: > 0 } server || agentOn is null) return own;
+        if (agentOn(agentName, server) is T moved) return moved;
+        Shared.Logger.LogWarning("[Graph] {Agent} is set to run on '{Server}', which can't be found; it runs on its own server ({Own}) instead.", agentName, server, own.ServerName);
+        return own;
+    }
 
     // ── Recall ───────────────────────────────────────────────────────────────────
 

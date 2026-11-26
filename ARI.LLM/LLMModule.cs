@@ -34,6 +34,11 @@ public class LLMModule : ILLMModule, IDisposable
     private readonly GraphPipeline?    graphPipeline;
     private readonly ConcurrentDictionary<string, CustomAgent> customAgents = new(StringComparer.OrdinalIgnoreCase);
     private readonly string            pipelinesPath;
+    private readonly string            agentsFile;
+
+    /// <summary>Copies of agents placed on another server, for pipeline steps set to run there (see <see cref="AgentOn"/>), by
+    /// agent and server name. Dropped whenever an agent or the server list changes, so the next run builds them afresh.</summary>
+    private readonly ConcurrentDictionary<string, Agent> agentCopies = new(StringComparer.OrdinalIgnoreCase);
     
     //agents
     private readonly TextingAgent?     textingAgent;
@@ -136,6 +141,7 @@ public class LLMModule : ILLMModule, IDisposable
         foreach (Server s in _servers) queues[s] = new LLMQueue();
 
         pipelinesPath = Path.Combine(Path.GetDirectoryName(agentsJsonPath) ?? ".", "Pipelines.json");
+        agentsFile    = agentsJsonPath;
         dreamingEnabled = LoadDreamingState();
 
         CleanScratchpads();
@@ -360,7 +366,7 @@ public class LLMModule : ILLMModule, IDisposable
 
         if (textingAgent is not null)
         {
-            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), processingThreads, liveCalls, NotifyWatchers);
+            graphPipeline = new GraphPipeline(textingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), processingThreads, liveCalls, NotifyWatchers, AgentOn);
             if (talkingAgent is not null)
             {
                 speechGraph = new GraphPipeline(talkingAgent, memory, context, engram, customAgents, GraphFor, id => subGraphs.GetValueOrDefault(id), processingThreads, liveCalls, NotifyWatchers);
@@ -471,6 +477,7 @@ public class LLMModule : ILLMModule, IDisposable
     {
         CustomAgent custom = Deserialize<CustomAgent>(entry);
         if (agentMap.ContainsKey(custom.Name)) return false;
+        ForgetAgentCopies();
         WirePhaseTracking(custom);
         customAgents[custom.Name] = custom;
         agentMap[custom.Name]     = custom;
@@ -769,7 +776,7 @@ public class LLMModule : ILLMModule, IDisposable
         Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
         foreach (PipelineGraph g in all)
         {
-            PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
+            PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), ServerExists);
             List<string> asReply = g.Validate(env);
             result[g.Id] = asReply.Count == 0 || g.Validate(env, asSub: true).Count == 0 ? [] : asReply;
         }
@@ -802,6 +809,7 @@ public class LLMModule : ILLMModule, IDisposable
     public void ReloadPipelines()
     {
         if (graphPipeline is null) return;
+        ForgetAgentCopies();   // called after agent changes too, so a step on another server picks them up
         Dictionary<string, PipelineGraph> loaded = new(StringComparer.OrdinalIgnoreCase), loadedSub = new(StringComparer.OrdinalIgnoreCase);
         try
         {
@@ -812,7 +820,7 @@ public class LLMModule : ILLMModule, IDisposable
             Dictionary<string, PipelineGraph> byId = all.GroupBy(g => g.Id).ToDictionary(g => g.Key, g => g.First(), StringComparer.OrdinalIgnoreCase);
             foreach (PipelineGraph graph in all)
             {
-                PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id));
+                PipelineGraph.Env env = new(graphPipeline.PortsOf, id => byId.GetValueOrDefault(id), ServerExists);
                 List<string> asReply = graph.Validate(env);
                 List<string> asSub   = graph.Validate(env, asSub: true);
                 if (asReply.Count == 0) loaded[graph.Id] = graph;
@@ -841,6 +849,7 @@ public class LLMModule : ILLMModule, IDisposable
     public void ApplyAgentPatch(string agentName, System.Text.Json.Nodes.JsonObject patch)
     {
         if (!agentMap.TryGetValue(agentName, out Agent? agent)) return;
+        ForgetAgentCopies();
         if (patch["agentPrompt"]?.GetValue<string>() is { } prompt) agent.AgentPrompt = prompt;
         if (patch["promptTemplates"] is System.Text.Json.Nodes.JsonObject tpl)
         {
@@ -859,6 +868,7 @@ public class LLMModule : ILLMModule, IDisposable
     public bool AssignAgentServer(string agentName, string serverName)
     {
         if (!agentMap.TryGetValue(agentName, out Agent? agent)) return false;
+        ForgetAgentCopies();
         Server? server = _servers.FirstOrDefault(s => s.Name.Equals(serverName, StringComparison.OrdinalIgnoreCase));
         if (server is null) return false;
         agent.ServerName  = server.Name;
@@ -891,6 +901,7 @@ public class LLMModule : ILLMModule, IDisposable
     public bool AssignAgentSlot(string agentName, string? slotName)
     {
         if (!agentMap.TryGetValue(agentName, out Agent? agent)) return false;
+        ForgetAgentCopies();
         agent.SlotName = slotName;
         agent.Slot = agent.Server is not null && slotName is { Length: > 0 }
             ? agent.Server.Slots.FirstOrDefault(sl => sl.Name.Equals(slotName, StringComparison.OrdinalIgnoreCase))
@@ -978,21 +989,82 @@ public class LLMModule : ILLMModule, IDisposable
         _servers.AddRange(servers);
         queues.Clear();
         foreach (Server s in _servers) queues[s] = new LLMQueue();
+        ForgetAgentCopies();
     }
 
     public void AddServer(Server server)
     {
         _servers.Add(server);
         queues[server] = new LLMQueue();
+        ForgetAgentCopies();
     }
 
-    public void RemoveServer(Guid id) => _servers.RemoveAll(s => s.Id == id);
+    public void RemoveServer(Guid id)
+    {
+        _servers.RemoveAll(s => s.Id == id);
+        ForgetAgentCopies();
+    }
 
     public void UpdateServer(Server updated)
     {
         int idx = _servers.FindIndex(s => s.Id == updated.Id);
         if (idx >= 0) _servers[idx] = updated;
+        ForgetAgentCopies();
     }
+
+    // ── Agents on another server (a pipeline step's "Runs on") ─────────────────
+
+    /// <summary>The agent <paramref name="agentName"/> as it runs on <paramref name="serverName"/>, for a pipeline step set to run
+    /// there: itself when that is already its server, otherwise a copy made from its Agents.json entry exactly as the agent was
+    /// loaded (same prompt, persona, budgets, sampling, tools) but bound to that server, taking whichever of its slots is free.
+    /// Only Dialogue and agents made in the control panel can be moved. Null if the agent or the server doesn't exist.</summary>
+    internal Agent? AgentOn(string agentName, string serverName)
+    {
+        if (!agentMap.TryGetValue(agentName, out Agent? own) || own is not (TextingAgent or CustomAgent)) return null;
+        Server? server = _servers.FirstOrDefault(s => s.Name.Equals(serverName, StringComparison.OrdinalIgnoreCase));
+        if (server is null) return null;
+        if (own.Server == server) return own;
+        return agentCopies.GetOrAdd($"{own.Name}\n{server.Name}", _ => CopyOnto(own, server));
+    }
+
+    private Agent CopyOnto(Agent own, Server server)
+    {
+        // The entry as saved, so the copy has every setting the original was loaded with, including ones no class models.
+        System.Text.Json.Nodes.JsonObject def = AgentEntry(own.Name) ?? new System.Text.Json.Nodes.JsonObject { ["Name"] = own.Name };
+        foreach (string k in def.Select(p => p.Key).Where(k => k.Equals("ServerName", StringComparison.OrdinalIgnoreCase) || k.Equals("SlotName", StringComparison.OrdinalIgnoreCase)).ToList())
+            def.Remove(k);
+        def["ServerName"] = server.Name;   // no SlotName: the copy floats, taking any free slot there, and never holds one
+        using JsonDocument doc = JsonDocument.Parse(def.ToJsonString());
+        Agent copy = own is CustomAgent ? Deserialize<CustomAgent>(doc.RootElement) : Deserialize<TextingAgent>(doc.RootElement);
+        WirePhaseTracking(copy);
+        _logger.LogInformation("[Pipelines] {Agent} is running on '{Server}' for the pipeline steps set to run there.", own.Name, server.Name);
+        return copy;
+    }
+
+    /// <summary>An agent's entry in Agents.json as saved, or null.</summary>
+    private System.Text.Json.Nodes.JsonObject? AgentEntry(string name)
+    {
+        try
+        {
+            if (!File.Exists(agentsFile)) return null;
+            using JsonDocument doc = JsonDocument.Parse(File.ReadAllText(agentsFile), new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            if (!TryGetPropCI(doc.RootElement, "Agents", out JsonElement agents) || agents.ValueKind != JsonValueKind.Array) return null;
+            foreach (JsonElement a in agents.EnumerateArray())
+                if (TryGetPropCI(a, "Name", out JsonElement n) && n.ValueKind == JsonValueKind.String && n.GetString()!.Equals(name, StringComparison.OrdinalIgnoreCase))
+                    return System.Text.Json.Nodes.JsonNode.Parse(a.GetRawText())!.AsObject();
+            return null;
+        }
+        catch (Exception ex)
+        {
+            _logger.LogWarning(ex, "Could not read {Agent}'s entry from Agents.json.", name);
+            return null;
+        }
+    }
+
+    /// <summary>Drops the agent copies, so pipeline steps on another server pick up a changed agent or server list on their next run.</summary>
+    private void ForgetAgentCopies() => agentCopies.Clear();
+
+    private bool ServerExists(string name) => _servers.Any(s => s.Name.Equals(name, StringComparison.OrdinalIgnoreCase));
 
     /// <summary>Reads Dialogue's shared system prompt and tools into its slot right after boot, so the first message of
     /// the session (and every new conversation, which shares that prefix) doesn't spend ~50 s reading it.</summary>
