@@ -46,7 +46,7 @@ public class ModelsController(PersistentData persistentData) : ControllerBase
                 fileSizeMb         = m.FileSizeBytes > 0 ? Math.Round(m.FileSizeBytes / 1048576.0) : (double?)null,
                 kvArch             = m.KvArch is { } a ? new { nLayers = a.NLayers, nKvHeads = a.NKvHeads, headDim = a.HeadDim } : null,
                 moe                = m.MoE,
-                mtp                = m.MTP,
+                mtp                = m.MTP == true,
                 supportsThinking   = m.SupportsThinking,
                 supportsReasoningEffort = m.SupportsReasoningEffort,
                 notes              = notes.TryGetValue(m.Name, out string? n) ? n : "",

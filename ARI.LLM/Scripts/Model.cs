@@ -43,8 +43,10 @@ public class Model
     [JsonPropertyName("moe")]
     public bool MoE { get; set; }
 
+    /// <summary>Multi-token prediction (llama-server drafts with the model's own MTP head). True: on. False: off, even when the
+    /// file has an MTP head, for a model that should run plain. Left out of Models.json: the file decides (on when it has a head).</summary>
     [JsonPropertyName("mtp")]
-    public bool MTP { get; set; }
+    public bool? MTP { get; set; }
 
     [JsonPropertyName("supportsThinking")]
     public bool SupportsThinking { get; set; }
@@ -74,9 +76,10 @@ public class Model
             KvArch = GgufReader.TryRead(fullPath);
             string? tmplPath = ChatTemplatePath is { Length: > 0 } t ? System.IO.Path.Combine(Paths.PersistentData, t) : null;
             SupportsReasoningEffort = GgufReader.SupportsReasoningEffort(fullPath, tmplPath);
-            // A file with a built-in MTP head turns MTP on whatever the flag said — the header is the honest signal,
-            // where the repo or file name is only a hint.
-            if (!MTP && GgufReader.HasMtpHead(fullPath)) MTP = true;
+            // With no "mtp" in Models.json, a file with a built-in MTP head turns MTP on: the header is the honest signal, where
+            // the repo or file name is only a hint. An explicit "mtp": false is a choice and is kept: before, the header overrode
+            // it, so a model meant to run plain (the Spark's 27B "Deep") drafted with MTP anyway.
+            if (MTP is null && GgufReader.HasMtpHead(fullPath)) MTP = true;
         }
         else
         {
