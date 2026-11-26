@@ -1037,7 +1037,17 @@ public class LLMModule : ILLMModule, IDisposable
         using JsonDocument doc = JsonDocument.Parse(def.ToJsonString());
         Agent copy = own is CustomAgent ? Deserialize<CustomAgent>(doc.RootElement) : Deserialize<TextingAgent>(doc.RootElement);
         WirePhaseTracking(copy);
-        _logger.LogInformation("[Pipelines] {Agent} is running on '{Server}' for the pipeline steps set to run there.", own.Name, server.Name);
+        // Every slot there is held by agents that named one (Memory, say): a floating agent would have no slot to take and a
+        // context budget of 0. Share the largest instead, without holding it; the two then evict each other's cached prompt.
+        if (copy.Floating && server.FreeLanes().Count == 0 && server.Slots.MaxBy(sl => sl.ContextLimit) is { } shared)
+        {
+            copy.Slot     = shared;
+            copy.Floating = false;
+            _logger.LogWarning("[Pipelines] Every slot on '{Server}' is held by other agents, so {Agent} shares '{Slot}' with them there and they evict each other's cache. Add a slot on '{Server}' to give it one of its own.",
+                server.Name, own.Name, shared.Name, server.Name);
+        }
+        _logger.LogInformation("[Pipelines] {Agent} is running on '{Server}' ({Where}) for the pipeline steps set to run there.",
+            own.Name, server.Name, copy.Floating ? "any free slot" : "slot " + copy.Slot!.Name);
         return copy;
     }
 
