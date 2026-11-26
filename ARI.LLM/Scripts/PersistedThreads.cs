@@ -43,6 +43,9 @@ internal static class PersistedThreads
         public int      V               { get; set; } = SchemaVersion;
         public string   Key             { get; set; } = "";
         public string   Pipeline        { get; set; } = "Dialogue";
+        // The control-panel pipeline the chat runs on (Thread.GraphId); null for Default. Without it a chat that a project
+        // (or the input bar) put on another pipeline went back to Default whenever the server restarted.
+        public string?  GraphId         { get; set; }
         public string?  OwnerId         { get; set; }
         public string?  Title           { get; set; }
         public string?  CustomTitle     { get; set; }
@@ -139,7 +142,7 @@ internal static class PersistedThreads
 
             Meta meta = new()
             {
-                Key = thread.Key, Pipeline = thread.Pipeline.ToString(), OwnerId = thread.OwnerId, Title = thread.Title, CustomTitle = thread.CustomTitle,
+                Key = thread.Key, Pipeline = thread.Pipeline.ToString(), GraphId = thread.GraphId, OwnerId = thread.OwnerId, Title = thread.Title, CustomTitle = thread.CustomTitle,
                 Medium = thread.Medium.ToString(), ChannelService = thread.ChannelService, ChannelTarget = thread.ChannelTarget, PlatformContext = thread.PlatformContext,
                 ApiContext = thread.ApiContext,
                 FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault,
@@ -165,7 +168,7 @@ internal static class PersistedThreads
         List<ThreadItem> items = thread.History.ToList().Where(i => i is not Response { State: State.Streaming }).ToList();
         Meta meta = new()
         {
-            Key = thread.Key, Pipeline = thread.Pipeline.ToString(), OwnerId = thread.OwnerId, Title = thread.Title,
+            Key = thread.Key, Pipeline = thread.Pipeline.ToString(), GraphId = thread.GraphId, OwnerId = thread.OwnerId, Title = thread.Title,
             Medium = thread.Medium.ToString(), ChannelService = thread.ChannelService, ChannelTarget = thread.ChannelTarget,
             FilesystemRoot = thread.FilesystemRoot, IsBrainVault = thread.IsBrainVault, IsRemoteProject = thread.IsRemoteProject,
             IsAdminChat = thread.IsAdminChat, HasMemoryAccess = thread.HasMemoryAccess, LastMessageAt = thread.LastMessageAt,
@@ -335,6 +338,7 @@ internal static class PersistedThreads
             if (meta is null) return false;
 
             thread.OwnerId         = meta.OwnerId;
+            thread.GraphId         = meta.GraphId;
             thread.Title           = meta.Title;
             thread.CustomTitle     = meta.CustomTitle;
             thread.Medium          = meta.Medium == "Discord" ? ThreadMedium.Channel : Enum.TryParse(meta.Medium, out ThreadMedium medium) ? medium : ThreadMedium.Web;
