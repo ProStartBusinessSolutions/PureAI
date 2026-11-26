@@ -1,0 +1,43 @@
+# PureAI on the DGX Spark, as a Portainer stack. See DEPLOYMENT.md.
+#
+# Portainer: Stacks → Add stack → name it "pureai" → paste this file → Deploy.
+# The image is private: add ghcr.io under Portainer → Registries first (a read:packages token).
+# To update: open the stack and press "Pull and redeploy". To pin a version, set PUREAI_TAG (e.g. 1.0.0).
+#
+# Everything PureAI keeps lives in /PureAI/Data on the Spark, never in the image.
+# The first-run setup token is printed in the container log. Then open http://spark-c14b.local:5074.
+
+name: pureai
+
+services:
+  pureai:
+    image: ghcr.io/prostartbusinesssolutions/pureai:${PUREAI_TAG:-latest}
+    container_name: pureai
+    restart: unless-stopped
+    pull_policy: always
+    ports:
+      - "${PUREAI_PORT:-5074}:5074"
+    environment:
+      TZ: Europe/London
+      UMASK: "022"            # only the PureAI user can write to /PureAI/Data
+      PUID: ${PUID:-10001}
+      PGID: ${PGID:-10001}
+    volumes:
+      - /PureAI/Data:/data
+      - /PureAI/Projects:/projects
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+    ulimits:
+      memlock: -1             # lets llama.cpp pin memory
+    stop_grace_period: 45s    # time for the model servers to shut down cleanly
+    healthcheck:
+      test: ["CMD-SHELL", "curl -fsS http://127.0.0.1:5074/api/v1/health >/dev/null || exit 1"]
+      interval: 30s
+      timeout: 5s
+      start_period: 90s
+      retries: 3

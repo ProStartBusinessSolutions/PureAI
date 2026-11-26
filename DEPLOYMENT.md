@@ -32,7 +32,7 @@ commit + tag vX.Y.Z   ──► build ARM64 image ──► ghcr.io/prostartbusi
 | `.github/workflows/docker.yml` | `IMAGE` is `ghcr.io/prostartbusinesssolutions/pureai`. Runs on `v*.*.*` tags and by hand only, not on pushes to `main`. A hand-run on a branch publishes `main`, never `latest`. | Publishes our image, and only for tagged builds. | Done (v1.0.0) |
 | `Dockerfile` | The `org.opencontainers.image.source` label points at this repository; title and description name PureAI and credit A·R·I. | Links the package to PureAI rather than A·R·I. | Done (v1.0.0) |
 | `Dockerfile` | Run the .NET and web UI build stage on the build machine's own platform (`FROM --platform=$BUILDPLATFORM`), cross-compiling for `linux-arm64`. | Lets an x64 laptop build the ARM64 image quickly. .NET under emulation is slow and unreliable. GitHub Actions builds on a native ARM64 runner, so it doesn't need this. | To do |
-| `docker/compose.pureai.yml` | New file: the Portainer stack (below). | | To do |
+| `docker/compose.pureai.yml` | New file: the Portainer stack (below). | | Done |
 | `ARI.UI/public/controlpanel.html` | About screen: add PureAI as entry 2 of the credit chain, with a link to this repository. | The credit chain, and the AGPL's source offer to people using PureAI over the network. | To do |
 
 ## 2. One-time setup
@@ -71,7 +71,7 @@ The Container registry only accepts classic personal access tokens.
 
        sudo mkdir -p /PureAI/Data /PureAI/Projects
 
-3. **Portainer → Registries → Add registry.** Choose **GitHub**, or **Custom registry** with the URL `ghcr.io`. Turn authentication on. The username is the named account and the password is its `read:packages` token.
+3. **Portainer → Registries → Add registry.** Choose **GitHub**, or **Custom registry** with the URL `ghcr.io` (the Spark's Portainer has no GitHub option). Turn authentication on. The username is the named account and the password is its `read:packages` token.
    A `docker login` in the Spark's terminal doesn't help: Portainer only uses its own registry logins.
 4. **Portainer → Stacks → Add stack.** Name it `pureai`, paste in `docker/compose.pureai.yml`, then deploy it.
 5. The container's log shows the first-run setup token. Use Portainer's **Logs** for the container, or run `docker logs pureai`.
