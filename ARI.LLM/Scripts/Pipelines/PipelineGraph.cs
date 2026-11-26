@@ -49,10 +49,12 @@ internal sealed class PipelineGraph
     };
 
     /// <summary>Input ports a graph may leave unwired: the agent then simply runs without that input. Lets a pipeline be
-    /// just Dialogue talking straight to the model, with no Memory step.</summary>
+    /// just Dialogue talking straight to the model, with no Memory step, and lets Code run without a reviewer: the Coder's
+    /// critique is only ever filled by a reviewer's Fail pathway (see ReviewLoop), so the shipped Code graph leaves it unwired.</summary>
     internal static readonly IReadOnlyDictionary<string, string[]> OptionalPorts = new Dictionary<string, string[]>(StringComparer.OrdinalIgnoreCase)
     {
         ["Dialogue"] = ["memories"],
+        ["Coder"]    = ["critique"],
     };
 
     internal static bool IsOptional(string agent, string port) =>
