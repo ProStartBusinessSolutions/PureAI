@@ -5563,6 +5563,21 @@ const pipUid = () => Math.random().toString(36).slice(2, 8);
 const pipTokens = t => [...new Set(((t || '').match(/\{(\w+)\}/g) || []).map(x => x.slice(1, -1)))].filter(x => !['message', 'since', 'attempt', 'max_attempts', 'attempt_log', 'seconds_since_reply', 'changes', 'conventions'].includes(x));   // both are always filled in, never wired
 const pipAgentTokens = d => pipTokens((d.agentPrompt || '') + '\n' + (d.messagePrompt || ''));
 function pipDef(n) { return n.type === 'agent' ? (agData.agents || []).find(a => a.name === n.agent) || {} : {}; }
+// A step can run on a chosen server (its "server") instead of where its agent is: the server runs a copy of the agent there, with the
+// same settings, taking any free slot. Only Dialogue and agents you made can be moved; Recall, Coder and Talking stay where they are.
+function pipCanMove(n) { return n.type === 'agent' && (n.agent === 'Dialogue' || !!pipDef(n).custom); }
+// Slots on a server that an agent has named for itself (they're running, so switched-off agents don't count).
+function pipHeldOn(server) { return (agData.agents || []).filter(a => a.enabled !== false && a.serverName === server && a.slotName).map(a => a.slotName); }
+// Where a step runs. A moved step floats, or shares the largest slot when every slot there is held (the server does the same).
+function pipRunsOn(n) {
+    const d = pipDef(n);
+    if (!n.server || n.server === d.serverName) return { server: d.serverName, slot: d.slotName || '', moved: false };
+    const srv = (agData.servers || []).find(s => s.name === n.server), held = pipHeldOn(n.server);
+    const free = srv && (srv.slots || []).some(s => !held.includes(s.name));
+    const shared = !srv || free ? '' : ((srv.slots || []).slice().sort((a, b) => (b.contextLimit || 0) - (a.contextLimit || 0))[0] || {}).name || '';
+    return { server: n.server, slot: shared, moved: true };
+}
+function pipRunsOnText(n) { const r = pipRunsOn(n); return (r.server || '?') + ' · ' + (r.moved ? (r.slot ? 'shares ' + r.slot : 'any free slot') : (r.slot ? 'holds ' + r.slot : 'any free slot')); }
 // A sub-pipeline is a node too: it takes the same two things START gives (both optional: left unwired it sees what the pipeline around it received) and has one output.
 const PIP_SUB_PORTS = ['history', 'message'];
 function pipSubOf(n) { return (pipD.data.pipelines || []).find(x => x.id === n.pipeline); }
@@ -5704,6 +5719,8 @@ function pipIssues(p) {
         ports.filter(q => !((pipD.optional || {})[n.agent] || []).includes(q)).forEach(q => { if (!p.edges.some(e => e.to === n.id && e.port === q)) out.push(n.agent + ': {' + q + '} has nothing wired in.'); });
         if (!pipReaches(p, n.id, end.id)) out.push(n.agent + ' never reaches END, so it does nothing.');
         if (n.agent === 'Dialogue' && into.length && into[0].from !== n.id) out.push('The built-in Dialogue agent must be the one connected to END.');
+        if (n.server && !pipCanMove(n)) out.push(pipLabel(n) + ' always runs on its own server; only Dialogue and agents you made can run on another.');
+        else if (n.server && !(agData.servers || []).some(s => s.name === n.server)) out.push(pipLabel(n) + ' is set to run on “' + n.server + '”, which isn\'t a server any more.');
     });
     p.nodes.filter(n => n.type === 'pipeline').forEach(n => {
         const sub = pipSubOf(n);
@@ -5713,7 +5730,7 @@ function pipIssues(p) {
         if (!pipReaches(p, n.id, end.id)) out.push('“' + sub.name + '” never reaches END, so it does nothing.');
         if (into.length && into[0].from === n.id) out.push('A sub-pipeline is connected to END, so this pipeline can\'t answer a chat by itself (an agent has to write the reply), but it can run as a step inside another pipeline.');
     });
-    const sl = {}; p.nodes.filter(n => n.type === 'agent').forEach(n => { const d = pipDef(n); if (d.serverName) (sl[d.serverName + '/' + d.slotName] = sl[d.serverName + '/' + d.slotName] || []).push(n.agent); });
+    const sl = {}; p.nodes.filter(n => n.type === 'agent').forEach(n => { const r = pipRunsOn(n), k = r.server + '/' + (r.slot || undefined); if (r.server) (sl[k] = sl[k] || []).push(pipLabel(n)); });
     Object.entries(sl).forEach(([k, v]) => { if (v.length > 1) out.push(v.join(' and ') + ' share ' + k + ' — they will evict each other\'s cache.'); });
     return out;
 }
@@ -5784,7 +5801,7 @@ function pipDraw(p) {
             });
             if (pws.length) { const t = agEl('div', '', 'PATHWAY TOOLS ▲'); t.className = 'pip-tools'; t.title = 'The tools this agent ends with. Each one is an output: wire it to where that answer should go. A wire back to the writer makes a loop.'; d.append(t); }
             ports.forEach(q => { const r = agEl('div', '', q); r.className = 'pip-row in'; d.append(r); });
-            const nb = agEl('div', '', isSub ? 'runs its own agents' : (def.serverName || '?') + ' · ' + (def.slotName ? 'holds ' + def.slotName : 'any free slot') + (def.enabled === false ? ' · off' : '') + (n.thread ? ' · thread: ' + n.thread : '')); nb.className = 'pip-nb'; d.append(nb);
+            const nb = agEl('div', '', isSub ? 'runs its own agents' : pipRunsOnText(n) + (def.enabled === false ? ' · off' : '') + (n.thread ? ' · thread: ' + n.thread : '')); nb.className = 'pip-nb'; d.append(nb);
             outs.forEach((o, i) => { const po = agEl('div'); po.className = 'pip-port'; po.style.cssText = `right:-7px;top:${39 + i * 28}px`; po.onmousedown = e => pipDragWire(p, n, e, o); d.append(po); });
             ports.forEach((q, i) => { const pi = agEl('div'); pi.className = 'pip-port' + (taken.has(n.id + ':' + q) ? ' taken' : ''); pi.dataset.node = n.id; pi.dataset.port = q; pi.style.cssText = `left:-7px;top:${39 + (outs.length + i) * 28 + (pws.length ? 22 : 0)}px`; d.append(pi); });
             d.onmousedown = e => { if (e.button === 0 && !e.target.classList.contains('pip-port')) { e.stopPropagation(); pipDragNode(p, n, d, e); } };
@@ -5888,7 +5905,22 @@ function pipInspector(p) {
     }
     const def = pipDef(n);
     box.append(agEl('div', 'font-size:15px;font-weight:600;', n.agent));
-    lab('Runs on'); dim((def.serverName || '?') + ' · ' + (def.slotName ? 'holds ' + def.slotName : 'any free slot'));
+    lab('Runs on');
+    if (pipCanMove(n)) {
+        // Another server for this step: the server runs a copy of the agent there, so chats on this pipeline are answered by that model.
+        const sel = document.createElement('select'); sel.className = 'vs-input'; sel.style.cssText = 'width:100%;box-sizing:border-box;margin-bottom:6px;';
+        const own = document.createElement('option'); own.value = ''; own.textContent = 'Its own server (' + (def.serverName || '?') + ')'; sel.append(own);
+        (agData.servers || []).filter(s => s.name !== def.serverName).forEach(s => { const o = document.createElement('option'); o.value = s.name; o.textContent = s.name; sel.append(o); });
+        if (n.server && n.server !== def.serverName && !(agData.servers || []).some(s => s.name === n.server)) { const o = document.createElement('option'); o.value = n.server; o.textContent = n.server + ' (no longer a server)'; sel.append(o); }
+        sel.value = n.server && n.server !== def.serverName ? n.server : '';
+        sel.onchange = () => { if (sel.value) n.server = sel.value; else delete n.server; pipTouch(); pipRender(); };
+        box.append(sel);
+        const r = pipRunsOn(n), sharers = (agData.agents || []).filter(a => a.enabled !== false && a.serverName === r.server && a.slotName === r.slot).map(a => a.name === 'Memory' ? 'Recall' : a.name);
+        dim(!r.moved ? pipRunsOnText(n) + '. Pick another server to answer on a different model; bind a project to this pipeline to use it for that project\'s chats.'
+            : 'A copy of ' + pipLabel(n) + ' with the same settings runs on ' + r.server + (r.slot
+                ? ', sharing ' + r.slot + ' with ' + (sharers.join(' and ') || 'the agents that hold it') + ': every slot there is held, so they evict each other\'s cache. Add a slot on ' + r.server + ' to give it one of its own.'
+                : ', taking any free slot there.'));
+    } else dim(pipRunsOnText(n));
     lab('Inputs'); dim(pipInputs(n).map(q => '{' + q + '}  ←  ' + ((p.edges.find(e => e.to === n.id && e.port === q) || {}).from ? (() => { const f = pipNode(p, p.edges.find(e => e.to === n.id && e.port === q).from); return f.type === 'start' ? (p.edges.find(e => e.to === n.id && e.port === q).fromPort === 'message' ? 'latest message' : 'conversation history') : pipLabel(f); })() : 'nothing') ).join('\n') || 'none');
     if ((def.pathways || []).length) {
         lab('Pathway tools');
