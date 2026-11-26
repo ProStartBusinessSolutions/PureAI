@@ -50,7 +50,11 @@ public class ServersController(PersistentData persistentData) : ControllerBase
         persistentData.UpdateServer(server);
         llm?.UpdateServer(server);
         if (existing.Name != server.Name)
+        {
             persistentData.RenameServerInAgents(existing.Name, server.Name);
+            persistentData.RenameServerInPipelines(existing.Name, server.Name);
+            llm?.ReloadPipelines();
+        }
 
         return Ok(server);
     }

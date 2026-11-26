@@ -448,21 +448,45 @@ public class PersistentData
         }
     }
 
+    /// <summary>Points every agent bound to <paramref name="oldName"/> at <paramref name="newName"/>. Edits the raw file, like
+    /// MergeAgent, so nothing else in it is touched: a round trip through AgentDefinition would drop every field it doesn't
+    /// model (UsePersona, HopLimit, Priority, ReasoningEffortOverride, BudgetImage...).</summary>
     public void RenameServerInAgents(string oldName, string newName)
     {
         lock (_agentsLock)
         {
-            AgentsFile data    = LoadAgents();
-            bool       changed = false;
-            foreach (AgentDefinition a in data.Agents)
+            JsonObject root = LoadAgentsRaw();
+            if (root[KeyFor(root, "Agents") ?? "Agents"] is not JsonArray agents) return;
+            bool changed = false;
+            foreach (JsonObject a in agents.OfType<JsonObject>())
             {
-                if (a.ServerName?.Equals(oldName, StringComparison.OrdinalIgnoreCase) == true)
+                string key = KeyFor(a, "ServerName") ?? "ServerName";
+                if (a[key] is JsonValue v && v.TryGetValue(out string? bound) && bound.Equals(oldName, StringComparison.OrdinalIgnoreCase))
                 {
-                    a.ServerName = newName;
-                    changed      = true;
+                    a[key]  = newName;
+                    changed = true;
                 }
             }
-            if (changed) Save(_agentsPath, data);
+            if (changed) File.WriteAllText(_agentsPath, root.ToJsonString(JsonOpts));
+        }
+    }
+
+    /// <summary>Points every pipeline step set to run on <paramref name="oldName"/> (its "server") at <paramref name="newName"/>.</summary>
+    public void RenameServerInPipelines(string oldName, string newName)
+    {
+        lock (_pipelinesLock)
+        {
+            if (!File.Exists(PipelinesPath)) return;
+            JsonObject? root = JsonNode.Parse(File.ReadAllText(PipelinesPath), documentOptions: DocOpts)?.AsObject();
+            if (root?["pipelines"] is not JsonArray pipelines) return;
+            bool changed = false;
+            foreach (JsonObject node in pipelines.OfType<JsonObject>().Select(p => p["nodes"]).OfType<JsonArray>().SelectMany(n => n.OfType<JsonObject>()))
+                if (node["server"] is JsonValue v && v.TryGetValue(out string? server) && server.Equals(oldName, StringComparison.OrdinalIgnoreCase))
+                {
+                    node["server"] = newName;
+                    changed        = true;
+                }
+            if (changed) File.WriteAllText(PipelinesPath, root.ToJsonString(JsonOpts));
         }
     }
 
